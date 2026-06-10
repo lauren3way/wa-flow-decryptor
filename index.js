@@ -11,7 +11,6 @@ const MAKE_WEBHOOK_URL = process.env.MAKE_WEBHOOK_URL;
 function decryptRequest(body) {
   const { encrypted_aes_key, encrypted_flow_data, initial_vector } = body;
 
-  // Decrypt the AES key using your RSA private key
   const decryptedAesKey = crypto.privateDecrypt(
     {
       key: PRIVATE_KEY,
@@ -21,13 +20,8 @@ function decryptRequest(body) {
     Buffer.from(encrypted_aes_key, 'base64')
   );
 
-  // Decrypt the flow data using the AES key
   const iv = Buffer.from(initial_vector, 'base64');
-  const decipher = crypto.createDecipheriv(
-    'aes-128-gcm',
-    decryptedAesKey,
-    iv
-  );
+  const decipher = crypto.createDecipheriv('aes-128-gcm', decryptedAesKey, iv);
 
   const encryptedData = Buffer.from(encrypted_flow_data, 'base64');
   const TAG_LENGTH = 16;
@@ -41,19 +35,21 @@ function decryptRequest(body) {
     decipher.final(),
   ]);
 
-  return JSON.parse(decrypted.toString('utf-8'));
+  return {
+    decryptedBody: JSON.parse(decrypted.toString('utf-8')),
+    aesKey: decryptedAesKey,
+    iv: iv
+  };
 }
 
-function encryptResponse(response, aesKeyBuffer, iv) {
-  // Flip the IV for the response
+function encryptResponse(response, aesKey, iv) {
   const flippedIv = Buffer.alloc(iv.length);
   for (let i = 0; i < iv.length; i++) {
     flippedIv[i] = ~iv[i];
   }
 
-  const cipher = crypto.createCipheriv('aes-128-gcm', aesKeyBuffer, flippedIv);
+  const cipher = crypto.createCipheriv('aes-128-gcm', aesKey, flippedIv);
   const data = Buffer.from(JSON.stringify(response));
-
   const encrypted = Buffer.concat([cipher.update(data), cipher.final()]);
   const authTag = cipher.getAuthTag();
 
@@ -62,22 +58,17 @@ function encryptResponse(response, aesKeyBuffer, iv) {
 
 app.post('/flow', async (req, res) => {
   try {
-    const { encrypted_aes_key, initial_vector } = req.body;
+    const body = req.body;
 
-    // Decrypt AES key (needed for response encryption too)
-    const decryptedAesKey = crypto.privateDecrypt(
-      {
-        key: PRIVATE_KEY,
-        padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-        oaepHash: 'sha256',
-      },
-      Buffer.from(encrypted_aes_key, 'base64')
-    );
+    // ── Handle Meta health check ping ──
+    if (body.action === 'ping') {
+      console.log('Health check ping received');
+      return res.json({ data: { status: 'active' } });
+    }
 
-    const iv = Buffer.from(initial_vector, 'base64');
-    const decryptedBody = decryptRequest(req.body);
-
-    console.log('Decrypted Flow payload:', JSON.stringify(decryptedBody));
+    // ── Handle encrypted data_exchange ──
+    const { decryptedBody, aesKey, iv } = decryptRequest(body);
+    console.log('Decrypted payload:', JSON.stringify(decryptedBody));
 
     // Forward plain JSON to Make
     await axios.post(MAKE_WEBHOOK_URL, decryptedBody);
@@ -88,13 +79,12 @@ app.post('/flow', async (req, res) => {
       data: {}
     };
 
-    const encryptedResponse = encryptResponse(responsePayload, decryptedAesKey, iv);
-
-    res.json({ encrypted_flow_data: encryptedResponse });
+    const encryptedResponse = encryptResponse(responsePayload, aesKey, iv);
+    return res.json({ encrypted_flow_data: encryptedResponse });
 
   } catch (err) {
-    console.error('Decryption error:', err);
-    res.status(500).json({ error: 'Decryption failed' });
+    console.error('Error:', err.message);
+    return res.status(500).json({ error: 'Decryption failed' });
   }
 });
 
