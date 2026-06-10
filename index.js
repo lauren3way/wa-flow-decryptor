@@ -58,27 +58,25 @@ function encryptResponse(response, aesKey, iv) {
 
 app.post('/flow', async (req, res) => {
   try {
-    const body = req.body;
-
-    // ── Handle Meta health check ping ──
-    if (body.action === 'ping') {
-      console.log('Health check ping received');
-      return res.json({ data: { status: 'active' } });
-    }
-
-    // ── Handle encrypted data_exchange ──
-    const { decryptedBody, aesKey, iv } = decryptRequest(body);
+    const { decryptedBody, aesKey, iv } = decryptRequest(req.body);
     console.log('Decrypted payload:', JSON.stringify(decryptedBody));
 
-    // Forward plain JSON to Make
+    // ── Handle Meta health check ping (arrives encrypted) ──
+    if (decryptedBody.action === 'ping') {
+      console.log('Health check ping received');
+      const encryptedResponse = encryptResponse(
+        { data: { status: 'active' } },
+        aesKey,
+        iv
+      );
+      return res.json({ encrypted_flow_data: encryptedResponse });
+    }
+
+    // ── Forward plain JSON to Make ──
     await axios.post(MAKE_WEBHOOK_URL, decryptedBody);
 
-    // Send encrypted SUCCESS response back to Meta
-    const responsePayload = {
-      screen: 'SUCCESS',
-      data: {}
-    };
-
+    // ── Send encrypted SUCCESS response back to Meta ──
+    const responsePayload = { screen: 'SUCCESS', data: {} };
     const encryptedResponse = encryptResponse(responsePayload, aesKey, iv);
     return res.json({ encrypted_flow_data: encryptedResponse });
 
@@ -87,7 +85,6 @@ app.post('/flow', async (req, res) => {
     return res.status(500).json({ error: 'Decryption failed' });
   }
 });
-
 app.get('/health', (req, res) => res.send('OK'));
 
 app.listen(process.env.PORT || 3000, () => {
