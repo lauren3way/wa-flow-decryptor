@@ -69,22 +69,28 @@ app.post('/flow', async (req, res) => {
         aesKey,
         iv
       );
-      return res.json({ encrypted_flow_data: encryptedResponse });
+      res.set('Content-Type', 'text/plain');
+      return res.send(encryptedResponse);
     }
 
     // ── Forward plain JSON to Make ──
     await axios.post(MAKE_WEBHOOK_URL, decryptedBody);
 
     // ── Send encrypted SUCCESS response back to Meta ──
-    const responsePayload = { screen: 'SUCCESS', data: {} };
-    const encryptedResponse = encryptResponse(responsePayload, aesKey, iv);
-    return res.json({ encrypted_flow_data: encryptedResponse });
+    const encryptedResponse = encryptResponse(
+      { screen: 'SUCCESS', data: {} },
+      aesKey,
+      iv
+    );
+    res.set('Content-Type', 'text/plain');
+    return res.send(encryptedResponse);
 
   } catch (err) {
     console.error('Error:', err.message);
     return res.status(500).json({ error: 'Decryption failed' });
   }
 });
+
 app.get('/health', (req, res) => res.send('OK'));
 
 app.listen(process.env.PORT || 3000, () => {
